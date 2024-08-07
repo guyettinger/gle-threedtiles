@@ -1,6 +1,6 @@
 {
     "name": "gle-threedtiles",
-    "version": "9.1.24",
+    "version": "9.1.25",
     "description": "An OGC 3DTiles viewer for Three.js",
     "main": "dist/threedtiles.min.js",
     "module": "dist/threedtiles.min.js",
@@ -26,7 +26,7 @@
     "author": "Emeric Beaufays",
     "license": "MIT",
     "peerDependencies": {
-        "three": "^0.157.0"
+        "three": "^0.167.1"
     },
     "dependencies": {
         "js-utils-z": "^1.2.1",
