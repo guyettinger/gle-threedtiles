@@ -1,14 +1,17 @@
 {
     "name": "gle-threedtiles",
-    "version": "9.1.25",
+    "version": "9.1.26",
     "description": "An OGC 3DTiles viewer for Three.js",
     "main": "dist/threedtiles.min.js",
     "module": "dist/threedtiles.min.js",
     "types": "dist/threedtiles.d.ts",
     "scripts": {
         "build": "webpack --config webpack.prod.config.js && npm run rollup-types",
+        "build:types": "tsc --declaration --emitDeclarationOnly --allowJs --outDir dist",
+        "build-dev": "webpack --config webpack.dev.config.js",
         "watch": "webpack --watch --config webpack.dev.config.js",
         "dev": "webpack-dev-server --config webpack.dev.config.js",
+        "generate-docs": "jsdoc --configure jsdoc.json --verbose",
         "rollup-types": "npx rollup -c --bundleConfigAsCjs"
     },
     "repository": {
@@ -31,14 +34,17 @@
     "dependencies": {
         "js-utils-z": "^1.2.1",
         "path-browserify": "^1.0.1",
+        "proj4": "^2.10.0",
         "regenerator-runtime": "^0.13.11",
-        "uuid": "^8.3.2"
+        "uuid": "^8.3.2",
+        "meshoptimizer": "^0.20.0"
     },
     "devDependencies": {
         "@babel/core": "^7.21.4",
         "@babel/plugin-syntax-dynamic-import": "^7.8.3",
         "@babel/plugin-syntax-import-meta": "^7.10.4",
         "@babel/preset-env": "^7.21.4",
+        "@types/three": "^0.167.1",
         "babel-loader": "^9.1.2",
         "copy-webpack-plugin": "^6.3.2",
         "core-js": "^3.27.1",
@@ -48,6 +54,7 @@
         "rollup": "^4.3.0",
         "rollup-plugin-dts": "^6.1.0",
         "three": "^0.157.0",
+        "typescript": "^5.4.5",
         "webpack": "^5.79.0",
         "webpack-cli": "^5.0.1",
         "webpack-dev-server": "^4.13.2",

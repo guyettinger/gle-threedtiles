@@ -1,37 +1,51 @@
+import * as THREE from 'three';
 import { LinkedHashMap } from 'js-utils-z';
 import { B3DMDecoder } from "../../decoder/B3DMDecoder";
-import * as THREE from 'three';
 import { MeshTile } from './MeshTile';
 import { JsonTile } from './JsonTile';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { KTX2Loader } from "three/addons/loaders/KTX2Loader";
+import { resolveImplicite } from '../implicit/ImplicitTileResolver.js';
+import { InstancedOGC3DTile } from './InstancedOGC3DTile';
+import { MeshoptDecoder } from 'meshoptimizer';
 
+let concurrentDownloads = 0;
 
-const zUpToYUpMatrix = new THREE.Matrix4();
-zUpToYUpMatrix.set(1, 0, 0, 0,
-    0, 0, -1, 0,
-    0, 1, 0, 0,
-    0, 0, 0, 1);
 
 /**
-* A Tile loader that manages caching and load order for instanced tiles.
-* The cache is an LRU cache and is defined by the number of items it can hold.
-* The actual number of cached items might grow beyond max if all items are in use.
-* 
-* The load order is designed for optimal perceived loading speed (nearby tiles are refined first).
-*
-* @param {scene} [scene] - a threejs scene.
-* @param {Object} [options] - Optional configuration object.
-* @param {number} [options.maxCachedItems=100] - the cache size.
-* @param {number} [options.maxInstances=1] - the cache size.
-* @param {function} [options.meshCallback] - A callback to call on newly decoded meshes.
-* @param {function} [options.pointsCallback] - A callback to call on newly decoded points.
-* @param {renderer} [options.renderer] - The renderer, this is required for KTX2 support.
-* @param {sring} [options.proxy] - An optional proxy that tile requests will be directed too as POST requests with the actual tile url in the body of the request.
-*/
+ * A Tile loader that manages caching and load order for instanced tiles.
+ * The cache is an LRU cache and is defined by the number of items it can hold.
+ * The actual number of cached items might grow beyond max if all items are in use.
+ * 
+ * The load order is designed for optimal perceived loading speed (nearby tiles are refined first).
+ *
+ */
 class InstancedTileLoader {
+    /**
+     * Creates a tile loader with a maximum number of cached items and callbacks.
+     * The only required property is a renderer that will be used to visualize the tiles.
+     * The maxCachedItems property is the size of the cache in number of objects, mesh tile and tileset.json files.
+     * The mesh and point callbacks will be called for every incoming mesh or points.
+     *
+     * @param {scene} [scene] - a threejs scene.
+     * @param {Object} [options] - Optional configuration object.
+     * @param {number} [options.maxCachedItems=100] - the cache size.
+     * @param {number} [options.maxInstances=1] - the cache size.
+     * @param {function} [options.meshCallback] - A callback to call on newly decoded meshes.
+     * @param {function} [options.pointsCallback] - A callback to call on newly decoded points.
+     * @param {sring} [options.proxy] - An optional proxy that tile requests will be directed too as POST requests with the actual tile url in the body of the request.
+     * @param {KTX2Loader} [options.ktx2Loader = undefined] - A KTX2Loader (three/addons)
+     * @param {DRACOLoader} [options.dracoLoader = undefined] - A DRACOLoader (three/addons)
+     * @param {renderer} [options.renderer = undefined] - optional the renderer, this is required only for on the fly ktx2 support. not needed if you pass a ktx2Loader manually
+     
+     */
     constructor(scene, options) {
+        this.zUpToYUpMatrix = new THREE.Matrix4();
+        this.zUpToYUpMatrix.set(1, 0, 0, 0,
+            0, 0, -1, 0,
+            0, 1, 0, 0,
+            0, 0, 0, 1);
         this.maxCachedItems = 100;
         this.maxInstances = 1;
         this.proxy = options.proxy;
@@ -42,20 +56,34 @@ class InstancedTileLoader {
             if (options.maxInstances) this.maxInstances = options.maxInstances;
 
         }
-        this.gltfLoader = new GLTFLoader();
-        const dracoLoader = new DRACOLoader();
-        dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.4.3/');
-        this.gltfLoader.setDRACOLoader(dracoLoader);
 
-        if (!!options && !!options.renderer) {
+
+        this.gltfLoader = new GLTFLoader();
+        if (!!options && !!options.dracoLoader) {
+            this.gltfLoader.setDRACOLoader(options.dracoLoader);
+            this.hasDracoLoader = true;
+        } else {
+            const dracoLoader = new DRACOLoader();
+            dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.4.3/');
+            this.gltfLoader.setDRACOLoader(dracoLoader);
+            this.gltfLoader.hasDracoLoader = true;
+        }
+
+        if (!!options && !!options.ktx2Loader) {
+            this.gltfLoader.setKTX2Loader(options.ktx2Loader);
+            this.hasKTX2Loader = true;
+        } else if (!!options && !!options.renderer) {
             const ktx2Loader = new KTX2Loader();
             ktx2Loader.setTranscoderPath('https://storage.googleapis.com/ogc-3d-tiles/basis/').detectSupport(options.renderer);
             this.gltfLoader.setKTX2Loader(ktx2Loader);
-
-            this.b3dmDecoder = new B3DMDecoder(options.renderer);
-        } else {
-            this.b3dmDecoder = new B3DMDecoder(null);
+            this.gltfLoader.hasKTX2Loader = true;
         }
+
+        this.gltfLoader.setMeshoptDecoder(MeshoptDecoder);
+        this.hasMeshOptDecoder = true;
+
+        this.b3dmDecoder = new B3DMDecoder(this.gltfLoader);
+
 
         this.cache = new LinkedHashMap();
         this.scene = scene;
@@ -64,43 +92,36 @@ class InstancedTileLoader {
         this.downloads = [];
         this.nextReady = [];
         this.nextDownloads = [];
-        this.init();
+
     }
 
-
+    /**
+     * To be called in the render loop or at regular intervals.
+     * launches tile downloading and loading in an orderly fashion.
+     */
     update() {
         const self = this;
-
+        self._checkSize();
         self.cache._data.forEach(v => {
             v.update();
         })
 
-    }
-    init() {
-
-        const self = this;
-        setIntervalAsync(() => {
-            self.download();
-        }, 10);
-        setIntervalAsync(() => {
-            const start = Date.now();
-            let loaded = 0;
-            do {
-                loaded = self.loadBatch();
-            } while (loaded > 0 && (Date.now() - start) <= 0)
-
-        }, 10);
+        if (concurrentDownloads < 8) {
+            self._download();
+        }
+        self._loadBatch();
     }
 
-    download() {
+
+    _download() {
         const self = this;
         if (self.nextDownloads.length == 0) {
-            self.getNextDownloads();
+            self._getNextDownloads();
             if (self.nextDownloads.length == 0) return;
         }
         while (self.nextDownloads.length > 0) {
             const nextDownload = self.nextDownloads.shift();
-            if (!!nextDownload){//} && nextDownload.shouldDoDownload()) {
+            if (!!nextDownload) {//} && nextDownload.shouldDoDownload()) {
                 //nextDownload.doDownload();
                 if (nextDownload.path.includes(".b3dm")) {
                     var fetchFunction;
@@ -118,6 +139,7 @@ class InstancedTileLoader {
                             );
                         }
                     }
+                    concurrentDownloads++;
                     fetchFunction().then(result => {
                         if (!result.ok) {
                             console.error("could not load tile with path : " + nextDownload.path)
@@ -125,17 +147,17 @@ class InstancedTileLoader {
                         }
                         return result.arrayBuffer();
 
-                    })
-                        .then(resultArrayBuffer => {
-                            return this.b3dmDecoder.parseB3DMInstanced(resultArrayBuffer, self.meshCallback, self.maxInstances, nextDownload.sceneZupToYup, nextDownload.meshZupToYup);
-                        })
-                        .then(mesh => {
-                            mesh.frustumCulled = false;
-                            nextDownload.tile.setObject(mesh);
-                            self.ready.unshift(nextDownload);
+                    }).then(resultArrayBuffer => {
+                        return this.b3dmDecoder.parseB3DMInstanced(resultArrayBuffer, (mesh) => { self.meshCallback(mesh, nextDownload.geometricError) }, self.maxInstances, nextDownload.sceneZupToYup, nextDownload.meshZupToYup);
+                    }).then(mesh => {
+                        mesh.frustumCulled = false;
+                        nextDownload.tile.setObject(mesh);
+                        self.ready.unshift(nextDownload);
 
-                        })
-                        .catch(e => console.error(e));
+                    }).catch(e => console.error(e))
+                        .finally(() => {
+                            concurrentDownloads--;
+                        });
                 } if (nextDownload.path.includes(".glb") || (nextDownload.path.includes(".gltf"))) {
                     var fetchFunction;
                     if (!self.proxy) {
@@ -152,24 +174,28 @@ class InstancedTileLoader {
                             );
                         }
                     }
+                    concurrentDownloads++;
                     fetchFunction().then(result => {
+                        if (!result.ok) {
+                            throw new Error("missing content");
+                        }
                         return result.arrayBuffer();
                     }).then(async arrayBuffer => {
-                        await checkLoaderInitialized(this.gltfLoader);
-                        this.gltfLoader.parse(arrayBuffer, gltf => {
+                        await _checkLoaderInitialized(this.gltfLoader);
+                        this.gltfLoader.parse(arrayBuffer, null, gltf => {
                             gltf.scene.asset = gltf.asset;
 
                             if (nextDownload.sceneZupToYup) {
-                                gltf.scene.applyMatrix4(zUpToYUpMatrix);
+                                gltf.scene.applyMatrix4(this.zUpToYUpMatrix);
                             }
                             gltf.scene.traverse((o) => {
                                 o.geometricError = nextDownload.geometricError;
                                 if (o.isMesh) {
                                     if (nextDownload.meshZupToYup) {
-                                        o.applyMatrix4(zUpToYUpMatrix);
+                                        o.applyMatrix4(this.zUpToYUpMatrix);
                                     }
                                     if (!!self.meshCallback) {
-                                        self.meshCallback(o);
+                                        self.meshCallback(o, o.geometricError);
                                     }
                                 }
                                 if (o.isPoints) {
@@ -198,7 +224,9 @@ class InstancedTileLoader {
                             }
                         });
                     }, e => {
-                        throw new Error("could not load tile : " + nextDownload.path)
+                        console.error("could not load tile : " + nextDownload.path)
+                    }).finally(() => {
+                        concurrentDownloads--;
                     });
 
 
@@ -219,6 +247,7 @@ class InstancedTileLoader {
                             );
                         }
                     }
+                    concurrentDownloads++;
                     fetchFunction().then(result => {
                         if (!result.ok) {
                             console.error("could not load tile with path : " + nextDownload.path)
@@ -227,19 +256,23 @@ class InstancedTileLoader {
                         return result.json();
 
                     }).then(json => {
+                        return resolveImplicite(json, nextDownload.path)
+                    }).then(json => {
                         nextDownload.tile.setObject(json, nextDownload.path);
                         self.ready.unshift(nextDownload);
                     })
-                        .catch(e => console.error(e))
+                        .catch(e => console.error(e)).finally(() => {
+                            concurrentDownloads--;
+                        });
                 }
             }
         }
         return;
     }
 
-    loadBatch() {
+    _loadBatch() {
         if (this.nextReady.length == 0) {
-            this.getNextReady();
+            this._getNextReady();
             if (this.nextReady.length == 0) return 0;
         }
         const download = this.nextReady.shift();
@@ -249,7 +282,7 @@ class InstancedTileLoader {
         return 1;
     }
 
-    getNextReady() {
+    _getNextReady() {
         let smallestDistance = Number.MAX_VALUE;
         let closest = -1;
         for (let i = this.ready.length - 1; i >= 0; i--) {
@@ -278,9 +311,23 @@ class InstancedTileLoader {
         }
     }
 
+    /**
+     * Schedules a tile content to be downloaded
+     * 
+     * @param {AbortController} abortController 
+     * @param {string} path path or url to tile content 
+     * @param {string|Number} uuid tile id
+     * @param {InstancedOGC3DTile} instancedOGC3DTile 
+     * @param {Function} distanceFunction 
+     * @param {Function} getSiblings 
+     * @param {Number} level 
+     * @param {Boolean} sceneZupToYup 
+     * @param {Boolean} meshZupToYup 
+     * @param {Number} geometricError 
+     */
     get(abortController, path, uuid, instancedOGC3DTile, distanceFunction, getSiblings, level, sceneZupToYup, meshZupToYup, geometricError) {
         const self = this;
-        const key = simplifyPath(path);
+        const key = _simplifyPath(path);
 
         if (!path.includes(".b3dm") && !path.includes(".json") && !path.includes(".glb") && !path.includes(".gltf")) {
             console.error("the 3DTiles cache can only be used to load B3DM, gltf and json data");
@@ -298,7 +345,7 @@ class InstancedTileLoader {
                 tile.addInstance(instancedOGC3DTile);
 
                 self.cache.put(key, tile);
-                self.checkSize();
+                //self._checkSize();
                 const realAbortController = new AbortController();
                 abortController.signal.addEventListener("abort", () => {
                     if (tile.getCount() == 0) {
@@ -325,7 +372,7 @@ class InstancedTileLoader {
                 const tile = new JsonTile();
                 tile.addInstance(instancedOGC3DTile);
                 self.cache.put(key, tile);
-                self.checkSize();
+                //self._checkSize();
                 const realAbortController = new AbortController();
                 abortController.signal.addEventListener("abort", () => {
                     if (tile.getCount() == 0) {
@@ -351,7 +398,7 @@ class InstancedTileLoader {
 
 
 
-    getNextDownloads() {
+    _getNextDownloads() {
         let smallestDistance = Number.MAX_VALUE;
         let closest = -1;
         for (let i = this.downloads.length - 1; i >= 0; i--) {
@@ -385,7 +432,7 @@ class InstancedTileLoader {
         }
     }
 
-    checkSize() {
+    _checkSize() {
         const self = this;
 
         let i = 0;
@@ -396,7 +443,7 @@ class InstancedTileLoader {
             self.cache.remove(entry.key);
             if (!entry.value.dispose()) {
                 self.cache.put(entry.key, entry.value);
-            }else{
+            } else {
                 //console.log("disposed and removed")
             }
 
@@ -404,38 +451,20 @@ class InstancedTileLoader {
     }
 }
 
-async function checkLoaderInitialized(loader) {
+async function _checkLoaderInitialized(loader) {
+
+    const self = this;
     return new Promise((resolve) => {
-      const interval = setInterval(() => {
-        if (loader.dracoLoader && loader.ktx2Loader) {
-          clearInterval(interval);
-          resolve();
-        }
-      }, 10); // check every 100ms
+        const interval = setInterval(() => {
+            if ((!loader.hasDracoLoader || loader.dracoLoader) && (!loader.hasKTX2Loader || loader.ktx2Loader)) {
+                clearInterval(interval);
+                resolve();
+            }
+        }, 10); // check every 100ms
     });
-  };
-function setIntervalAsync(fn, delay) {
-    let timeout;
+};
 
-    const run = async () => {
-        const startTime = Date.now();
-        try {
-            await fn();
-        } catch (err) {
-            console.error(err);
-        } finally {
-            const endTime = Date.now();
-            const elapsedTime = endTime - startTime;
-            const nextDelay = elapsedTime >= delay ? 0 : delay - elapsedTime;
-            timeout = setTimeout(run, nextDelay);
-        }
-    };
-
-    timeout = setTimeout(run, delay);
-
-    return { clearInterval: () => clearTimeout(timeout) };
-}
-function simplifyPath(main_path) {
+function _simplifyPath(main_path) {
 
     var parts = main_path.split('/'),
         new_path = [],

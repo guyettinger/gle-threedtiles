@@ -4,26 +4,46 @@
 # T H R E E D T I L E S : http://www.jdultra.com/
 
 
+A faster 3DTiles viewer for three.js, now with OGC3DTiles 1.1 support
 
-The fastest 3DTiles viewer for three.js
+## sample getting started projects
+[Getting started vanilla js](https://drive.google.com/file/d/14lipb5eUqfad-n7EUgXuXul-drPdLifV/view?usp=sharing)
 
-[Google Map Tile API](https://www.jdultra.com/google-tiles/index.html) (experimental service with limited availability)
+[Getting started react-three-fiber](https://drive.google.com/file/d/1C102qriCsnra9EUbb8WzO4jZStp-eEah/view?usp=sharing)
 
-[Photogrametry (OBJ conversion)](https://ebeaufay.github.io/ThreedTilesViewer.github.io/)
+## Demos
+
+[Google Tiles overlay](https://www.jdultra.com/overlay/index.html)
+overlay high quality meshes over google tiles with some shader magic to avoid overlap
+
+[Windows desktop viewer](https://github.com/ebeaufay/desktop-3dtiles-viewer)
+A viewer for windows based on flutter and this library
+
+[Google Map Tile API](https://www.jdultra.com/google-tiles/index.html) 
+google tiles in a geospatial framework [ULTRAGLOBE](https://github.com/ebeaufay/UltraGlobe)
+
+[Photogrametry](https://ebeaufay.github.io/ThreedTilesViewer.github.io/)
+Some tiles converted from OBJ via proprietary ULTRAMESH tool
 
 [Point cloud vs Mesh](https://www.jdultra.com/pointmeshing/index.html)
 
 [PBR material (GlTF conversion)](https://www.jdultra.com/pbr/)
 
 [Occlusion culling (IFC conversion)](https://www.jdultra.com/occlusion/index.html)
+Occlusion culling applied at the tile-loading level. This isn't just GPU occlusion culling, hidden tiles aren't even downloaded.
 
-[Instanced Tileset (pilot a swarm of highly detailed spaceships)](https://www.jdultra.com/instanced/index.html)
+[Instanced Tileset](https://www.jdultra.com/instanced/index.html)
+A multitude of identical meshes, each with its own LOD hiearchy but duplicate tiles are instanced
 
+## Getting started
 
-install the library and threejs if not done already:
+### DOC
+[JSDOC](https://www.jdultra.com/threedtiles/docs/)
+
+install the library:
 
 ```
-npm install three @jdultra/threedtiles --legacy-peer-deps
+npm install three @jdultra/threedtiles
 ```
 
 Adding a tileset to a scene is as easy as :
@@ -41,30 +61,31 @@ const ogc3DTile = new OGC3DTile({
 scene.add(ogc3DTile);
 ```
 
-It's up to the user to call updates on the tileset. You might call them whenever the camera moves or at regular time intervals like here:
+It's up to the user to call updates on the tileset. 
 ```
-setInterval(function () {
-    ogc3DTile.update(camera);
-}, 20);
+function animate() {
+    requestAnimationFrame(animate);
+    
+    ogc3DTile.update(camera); // computes what tiles need to be refined and what tiles can be disposed.
+    ogc3DTile.tileLoader.update(); // downloads, loads and caches tiles in optimal order.
+    
+    ...
+
+}
 ```
 
-The library is limmited to B3DM and glb/gltf tiles.
+It is discouraged to call the update functions outside the render loop in a setInterval for example.
+While that may work fine on desktop, mobile browsers tend to block an entire frame when a timeout triggers in it.
 
-Here is a simple project : [Getting started](https://drive.google.com/file/d/1kJ-yfYmy8ShOMMPPXgqW2gMgGkLOIidf/view?usp=share_link)
-
-Unzip and run :
-
-> npm install
-
-> npm run dev
 
 ## Mesh to 3DTiles Converter
 
 If you need to convert meshes to 3DTiles, from small assets to gigabytes of data, contact me for a trial on UltraMesh tool.
 It works for all types of meshes: photogrametry, BIM, colored or textured meshes with a single texture atlas or many individual textures.
-There's support for OBJ, IFC and glTF meshes and las/laz point clouds.
+There's support for OBJ, IFC, Collada and glTF meshes and las/laz point clouds.
 I aim for optimal quality in terms of mesh, texture and tileset structure and for optimal streaming speed, with no limit to the size of the input data.
 Contact: emeric.beaufays@jdultra.com
+
 
 ## Features
 
@@ -77,12 +98,13 @@ Contact: emeric.beaufays@jdultra.com
 - Occlusion culling
 - Instanced tilesets
 - Center tileset and re-orient geolocated data
-- gltf/glb tiles (OGC3DTiles 1.1)
-- draco and ktx2 compression support
+- quantization, draco, mshopt and ktx2 compression support
 - point clouds (only through gltf/glb tiles)
+- loading strategy options ("incremental" or "immediate")
 
-Support for OGC3DTiles 1.1 is underway. gltf/glb tiles are already supported but not yet implicit tiling.
-There is no plan to support .pnts or .i3dm tiles as points and instanced meshes are already supported through gltf tiles.
+
+OGC3DTiles 1.1 are supported.
+There is no plan to support .pnts, .i3dm or .cmpt  tiles as these formats are deprecated in favor of glb/gltf tiles.
 
 ### geometric Error Multiplier
 The geometric error multiplier allows you to multiply the geometric error by a factor.
@@ -106,6 +128,56 @@ Many viewers use the maxScreenSpaceError instead of a geometric error multiplier
 A geometricErrorMultiplier of 1 corresponds to a maxScreenSpaceError of 16.
 A geometricErrorMultiplier of 0.5 corresponds to a maxScreenSpaceError of 32.
 
+#### distance bias
+The distance bias allows loading more or less detail close to the camera relative to further away.
+The distance bias simply applies an exponent on tile distance to the camera so you have to balance it out manually with the geometricErrorMultiplier.
+
+For example, if you want to load more detail close to the camera, you might do something like this:
+```
+const ogc3DTile = new OGC3DTile({
+    url: "https://storage.googleapis.com/ogc-3d-tiles/ayutthaya/tileset.json",
+    renderer: renderer,
+    geometricErrorMultiplier: 10.0,
+    distanceBias: 1.5
+});
+```
+In this case the higher distance bias will cause less detail to be loaded overall since all calculated distances get raised to the power 1.5.
+To compensate, the geometricErrorMultiplier is set at a higher value.
+
+These values need to be adjusted manually based on what is considered relatively close or far from the camera and truly depends on your scene and the relative distance of the camera to the tiles during normal navigation. In other words, it's impossible to have magic bullet values the LOD switch distance can be fine-tuned through those parameters.
+
+You can change the distance bias for a tileset at any time:
+
+```
+tileset.setDistanceBias(1.5);
+```
+### loading strategy
+
+#### Incremental
+Incremental loading is the default and loads all intermediate levels incrementally and keeps them in memory. While this gives a direct feedback on loading progress, the CPU memory footprint is large and overall loading speed is slower than with "immediate" mode.
+
+To explicitely set the incremental loading strategy:
+```
+const ogc3DTile = new OGC3DTile({
+    url: "https://storage.googleapis.com/ogc-3d-tiles/ayutthaya/tileset.json",
+    renderer: renderer,
+    loadingStrategy: "INTERMEDIATE"
+});
+```
+
+#### Immediate
+
+Immediate loading skips intermediate LODs and immediately loads the ideal LOD. Less data is downloaded (faster load time) and less data is kept in CPU memory but holes will appear until the tiles are loaded.
+
+To set the immediate loading strategy:
+```
+const ogc3DTile = new OGC3DTile({
+    url: "https://storage.googleapis.com/ogc-3d-tiles/ayutthaya/tileset.json",
+    renderer: renderer,
+    loadingStrategy: "IMMEDIATE"
+});
+```
+
 ### load tiles outside of view
 By default, only the tiles that intersect the view frustum are loaded. When the camera moves, the scene will have to load the missing tiles and the user might see some holes in the model.
 Instead of this behaviour, you can force the lowest possible LODs to be loaded for tiles outside the view so that there are no gaps in the mesh when the camera moves. This also allows displaying shadows from parts of the scene that are not in the view.
@@ -117,12 +189,20 @@ const ogc3DTile = new OGC3DTile({
     loadOutsideView: true
 });
 ```
+### draw bounding volume
+
+Draw bounding volumes around visible tiles
+```
+const ogc3DTile = new OGC3DTile({
+    url: "https://storage.googleapis.com/ogc-3d-tiles/ayutthaya/tileset.json",
+    renderer: renderer,
+    drawBoundingVolume: true
+});
+```
 
 ### Google Maps 3D Tiles
-Google maps 3DTiles can be loaded similarly although there is a slight differnce in that the tileset isn't a regular OGC3DTile tileset but "3DTiles NEXT" with a specific extension for glb tiles.
-An extra rotation needs to be applied to straighten the globe.
-On top of that, the API key mechanism requires is passed as a query param to all fetched tiles.
-note that the "queryParams" parameter below can be used to add any query parameters for tiles.
+Google maps 3DTiles can be loaded similarly.
+The API key mechanism requires that a token be passed as a query param to all fetched tiles.
 
 ```
 const ogc3DTile = new OGC3DTile({
@@ -133,6 +213,29 @@ const ogc3DTile = new OGC3DTile({
     loadOutsideView: true
 });
 ```
+
+#### Copyright info
+
+This is mostly specific to google tiles but may be used by other vendors.
+
+Google requires that, copyright info for producers of the 3D data be displayed.
+A global function #getOGC3DTilesCopyrightInfo returns the list of vendors that need to be displayed.
+
+```
+import { OGC3DTile, getOGC3DTilesCopyrightInfo } from "./tileset/OGC3DTile";
+
+...
+
+animate(){
+    requestAnimationFrame( animate );
+    googleTiles.update(camera);
+    tileLoader.update();
+    ...
+    console.log(getOGC3DTilesCopyrightInfo());
+}
+
+```
+
 ### Callback
 
 #### onLoadCallback
@@ -164,6 +267,36 @@ const ogc3DTile = new OGC3DTile({
 });
 ```
 
+#### Update
+
+Calling OGC3DTile#update gives a direct feedback on the state of the tileset:
+```
+function animate() {
+    requestAnimationFrame(animate);
+    
+    ogc3DTile.update(camera); // computes what tiles need to be refined and what tiles can be disposed.
+    const state = ogc3DTile.tileLoader.update(); // downloads, loads and caches tiles in optimal order.
+}
+```
+
+In the example above, the "state" object may look like this:
+
+```
+{
+    numTilesLoaded: 82, 
+    numTilesRendered: 82, 
+    maxLOD: 9, 
+    percentageLoaded: 1
+}
+```
+
+- "numTilesLoaded" gives the number of tiles in the tileset that are loaded and should be visible (including intermediate LODs for the "incremental" loading strategy).
+- "numTilesRendered gives the number of tiles currently rendered.
+- "maxLOD" highest LOD currently rendered
+- "percentageLoaded" property gives an indication of the loading progress. Note that the loading progress may go back and forth a bit while the tree is being expanded but a value of 1 means the tileset is loaded.
+
+
+
 #### Points callback
 Add a callback on loaded point tiles in order to set a material or do some logic on the points.
 
@@ -179,9 +312,11 @@ const ogc3DTile = new OGC3DTile({
 ```
 If using a shared cache between tilesets, check out the next section.
 
-### Cache
-You may instanciate a cache through the TileLoader class and re-use it for several or all your tilesets. 
-The limitation is that all the tilesets using the same cache will have the same callback.
+### Cache and TileLoader
+The Tile loader handles the loading strategy, managing a cache and the order for tile downloads and loads.
+
+You may re-use the Tile loader for several or all your tilesets. 
+The limitation is that all the tilesets using the same TileLoader will have the same mesh/points callback.
 
 The TileLoader takes an optional object as argument:
 @param {Object} [options] - Optional configuration object.
@@ -196,23 +331,44 @@ import { TileLoader } from '@jdultra/threedtiles';
 const tileLoader = new TileLoader({
         renderer: renderer,
         maxCachedItems: 100,
-        meshCallback: mesh => {
+        meshCallback: (mesh, geometricError) => {
             //// Insert code to be called on every newly decoded mesh e.g.:
             mesh.material.wireframe = false;
             mesh.material.side = THREE.DoubleSide;
             //mesh.material.metalness = 0.0
         },
-        pointsCallback: points => {
-            points.material.size = Math.min(1.0, 0.5 * Math.sqrt(points.geometricError));
+        pointsCallback: (points, geometricError) => {
+            points.material.size = Math.min(1.0, 0.5 * Math.sqrt(geometricError));
             points.material.sizeAttenuation = true;
         }
     });
-const ogc3DTile = new OGC3DTile({
-        url: "https://storage.googleapis.com/ogc-3d-tiles/ayutthaya/tileset.json",
+const ogc3DTile1 = new OGC3DTile({
+        url: "...",
         renderer: renderer,
         tileLoader: tileLoader,
         meshCallback: mesh => { mesh.material.wireframe = true;} // This callback will not be used as the callback provided to the TileLoader takes priority
     });
+
+const ogc3DTile2 = new OGC3DTile({
+        url: "...",
+        renderer: renderer,
+        tileLoader: tileLoader
+    });    
+```
+
+If you use the same tile loader for several tilesets, you can call update on it just once per frame:
+
+```
+function animate() {
+    requestAnimationFrame(animate);
+    
+    ogc3DTile1.update(camera);
+    ogc3DTile2.update(camera);
+    tileLoader.update(); // important! since v10
+    
+    ...
+
+}
 ```
 
 ### Transformations
@@ -255,6 +411,8 @@ const ogc3DTile = new OGC3DTile({
 Then, you must update the occlusionCullingService within your render loop:
 ```
 function animate() {
+    ogc3DTile.update(camera);
+    ogc3DTile.tileLoader.update();
     requestAnimationFrame(animate);
     renderer.render(scene, camera);
     occlusionCullingService.update(scene, renderer, camera)
@@ -309,11 +467,11 @@ for (let i = 0; i < 100; i++) {
         geometricErrorMultiplier: 1.0,
         loadOutsideView: false,
         tileLoader: instancedTileLoader,
-        static: true // when static is set to true, don't forget to call InstancedOGC3DTile#updateMatrix manually
+        static: true // when static is set to true, you must call InstancedOGC3DTile#updateMatrix manually
     });
     
     tileset.translateOnAxis(new THREE.Vector3(1, 0, 0), 50 * i);
-    tileset.updateMatrix();
+    tileset.updateMatrix(); // important when static property is true
     scene.add(tileset);
     instancedTilesets.push(tileset);
 }
@@ -348,9 +506,13 @@ const ogc3DTile = new OGC3DTile({
 ```
 This property is also available for instanced models.
 
-### static tilesets and other performance tips
-When you know your tileset will be static, you can specify it in the OGC3DTile object constructor parameter.
+### Performance tips
+
+#### static tilesets
+When you know your tileset will be static or move rarely, you can specify it in the OGC3DTile object constructor parameter.
 This will skip recalculating the transformation matrix of every tile each frame and give a few extra frames per second.
+
+However, you'll need to manually call #updateMatrix and #updateMatrixWorld on the OGC3DTile object whenever you apply a transformation.
 
 ```
 const ogc3DTile = new OGC3DTile({
@@ -358,49 +520,160 @@ const ogc3DTile = new OGC3DTile({
         renderer: renderer,
         static: true
     });
+
+    setTimeout(()=>{
+
+        ogc3DTile.rotateOnAxis(new THREE.Vector3(1, 0, 0), Math.PI * -0.5);
+        ogc3DTile.updateMatrix();
+        ogc3DTile.updateMatrixWorld(true);
+    },1000)
 ```
 
-Either way, it's advised to set the autoUpdate property of the scene to false and call Scene#updateMatrixWorld manually whenever you move things around.
+For InstancedOGC3DTile objects, You only need to call instancedOgc3DTile#updateMatrix() and the gains will be much less significant.
 
 ```
-scene.matrixAutoUpdate = false;
-scene.matrixWorldAutoUpdate = false;
+const ogc3DTile = new InstancedOGC3DTile({
+        ...
+    });
 
-// and when objects move:
-scene.updateMatrixWorld(true);
+    setTimeout(()=>{
+        ogc3DTile.rotateOnAxis(new THREE.Vector3(1, 0, 0), Math.PI * -0.5);
+        ogc3DTile.updateMatrix();
+    },1000)
+```
+### Meshopt, Draco and Ktx2
+Compressed meshes via Draco and compressed textures in Ktx2 format are supported automatically using the threejs plugins by passing the renderer at initialization.
+The ktx and draco loader can also be passed manually.
+
+The Meshopt decoder doesn't need to be specified, it'll be loaded automatically.
+
+#### when using a tileLoader (recommended):
 
 ```
-### Draco and Ktx2
-Compressed meshes via Draco and compressed textures in Ktx2 format are supported automatically using the threejs plugins.
-KTX uses an external wasm loaded at runtime so if you have trouble packaging your app correctly, check out the 
-[Getting started](https://drive.google.com/file/d/1kJ-yfYmy8ShOMMPPXgqW2gMgGkLOIidf/view?usp=share_link) project for a sample webpack configuration.
+const dracoLoader = new DRACOLoader();
+dracoLoader.setDecoderPath('node_modules/three/examples/jsm/libs/draco/');
+
+const ktx2Loader = new KTX2Loader();
+ktx2Loader.setTranscoderPath('node_modules/three/examples/jsm/libs/basis/').detectSupport(renderer);
+
+const tileLoader = new TileLoader({
+        ktx2Loader: ktx2Loader,
+        dracoLoader: dracoLoader,
+        maxCachedItems: 100,
+        ...
+    });
+const ogc3DTile = new OGC3DTile({
+        url: "...",
+        tileLoader: tileLoader,
+        ...
+    });
+```
+
+#### when using a tileLoader fallback to web wasms loaded through http:
+
+```
+
+const tileLoader = new TileLoader({
+        renderer: renderer
+        maxCachedItems: 100,
+        ...
+    });
+const ogc3DTile = new OGC3DTile({
+        url: "...",
+        tileLoader: tileLoader,
+        ...
+    });
+```
+
+#### when not using a TileLoader:
+
+```
+const dracoLoader = new DRACOLoader();
+dracoLoader.setDecoderPath('node_modules/three/examples/jsm/libs/draco/');
+
+const ktx2Loader = new KTX2Loader();
+ktx2Loader.setTranscoderPath('node_modules/three/examples/jsm/libs/basis/').detectSupport(renderer);
+
+const ogc3DTile = new OGC3DTile({
+        url: "...",
+        ktx2Loader: ktx2Loader,
+        dracoLoader: dracoLoader,
+        ...
+    });
+```
+
+#### when not using a TileLoader and using fallback wasms loaded from web:
+
+```
+const ogc3DTile = new OGC3DTile({
+        url: "...",
+        renderer: renderer,
+        ...
+    });
+```
 
 ### tileset update loop
 Updating a single tileset via OGC3DTile#update or InstancedOGC3DTile#update is quite fast, even when the tree is deep.
-For a single tileset, it's safe to call it regularly with a setInterval:
+For a single tileset, it's safe to call it on every frame:
 ```
-function startInterval() {
-        interval = setIntervalAsync(function () {
-            ogc3DTile.update(camera);
-        }, 20);
-    }
-```
-
-However, with instancedTilesets, you may have hundreds or even thousands of LOD trees that need to be updated individually. In order to preserve frame-rate,
-you may want to implement something a little smarter that yields the CPU to the render loop. In the example below, the process tries to update as many tilesets as it can in under 4 ms.
-
-```
-function now() {
-    return (typeof performance === 'undefined' ? Date : performance).now();
+function animate() {
+    requestAnimationFrame(animate);
+    ogc3DTile.update(camera);
+    ogc3DTile.tileLoader.update();
+    
+    ... // rest of render loop
 }
-let updateIndex = 0;
-setInterval(() => {
-    let startTime = now();
-    do{
-        instancedTilesets[updateIndex].update(camera);
-        updateIndex= (updateIndex+1)%instancedTilesets.length;
-    }while(updateIndex < instancedTilesets.length && now()-startTime<4);
-},50);
+animate();
 ```
 
-window#requestIdleCallback is also a good option but the rate of updates becomes slightly unpredictable.
+However, if you have several OGC3DTiles loaded or when you use instancedTilesets, you may have hundreds or even thousands of LOD trees that need to be updated individually. In order to preserve frame-rate,
+you'll want to avoid updating every single tileset on every frame.
+
+### Memory
+This is especially important for iOS that limits the memory per tab quite harshly and doesn't allow growing the memory allocated to a tab.
+
+Once a mesh is loaded, the mesh and texture data stays in CPU memory which isn't necessary unless one intends to modify it.
+A nice trick is to allow this data to be garbage collected. However, three.js doesn't have API for this and the internal references are hard to find but this code
+seems to free a limited amount of memory:
+
+```
+const tileLoader = new TileLoader({
+        ...
+        const previousOnAfterRender = mesh.onAfterRender; 
+        mesh.onAfterRender = () => {
+            if(previousOnAfterRender) previousOnAfterRender();
+            if(mesh.geometry && mesh.geometry.attributes){
+                if (mesh.geometry.attributes.position) {
+                    mesh.geometry.attributes.position.array = undefined;
+                    if (mesh.geometry.attributes.position.data) {
+                        mesh.geometry.attributes.position.data.array = undefined;
+                    }
+                }
+                if (mesh.geometry.attributes.uv){
+                    mesh.geometry.attributes.uv.array = undefined;  
+                    if (mesh.geometry.attributes.uv.data) {
+                         mesh.geometry.attributes.uv.data.array = undefined;
+                    }
+                } 
+                if (mesh.geometry.attributes.normal) {
+                    mesh.geometry.attributes.normal.array = undefined;
+                    if (mesh.geometry.attributes.normal.data) {
+                        mesh.geometry.attributes.normal.data.array = undefined;
+                    }
+                }
+            }
+            if (mesh.material && mesh.material.map) {
+                mesh.material.map.mipmaps = undefined;
+                if (mesh.material.map.source) {
+                    mesh.material.map.source.data = undefined;
+                }
+            }
+
+            mesh.onAfterRender = previousOnAfterRender;
+        }
+    });
+```
+
+Be sure to call this in the mesh onAfterRender callback to make sure the data is already on GPU.
+
+Depending on the mesh and texture type, different properties might hold data to be nullified so it can be garbage collected. It's up to the user to debug and see what geometry or material properties hold references to large data.
